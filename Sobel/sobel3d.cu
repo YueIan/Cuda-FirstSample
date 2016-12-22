@@ -8,12 +8,14 @@ extern bool InitCUDA();
 #define MONITOR_TIME
 #define NUM_THREADS 512
 
+template<typename T>
 __global__ void doConvolutionInLineCUDA(
-    const short* src,
-    short* des,
+    const T* src,
+    T* des,
     const int x,
     const int y,
-    const int z
+    const int z,
+    const T default_value
 ) {
     const int thread_id = threadIdx.x;
     const int block_id = blockIdx.x;
@@ -25,8 +27,8 @@ __global__ void doConvolutionInLineCUDA(
         return;
     }
 
-    short s_x, s_y, s_z;
-    short _s_x, _s_y, _s_z;
+    T s_x, s_y, s_z;
+    T _s_x, _s_y, _s_z;
     float temp;
     //short temp_m[27];
     for(i;i<x;i++){
@@ -73,19 +75,21 @@ __global__ void doConvolutionInLineCUDA(
         if(abs(temp)>1e-5){
             des[k*y*x + j*x + i] = src[k*y*x + j*x + i];
         } else {
-            des[k*y*x + j*x + i] = 0;
+            des[k*y*x + j*x + i] = default_value;
         }
         //des[k*y*x + j*x + i] = (short)temp;
     }
 
 }
 
+template<typename T>
 cudaError_t convolution3DCUDA(
-    const short* src,
-    short* des,
+    const T* src,
+    T* des,
     const int x,
     const int y,
-    const int z
+    const int z,
+    const T default_value
 ) {
     int array_size = x * y * z;
     cudaError_t cudaStatus = cudaSetDevice(0);
@@ -94,15 +98,15 @@ cudaError_t convolution3DCUDA(
         goto Error;
     }
 
-    short *src_gpu, *des_gpu;
+    T *src_gpu, *des_gpu;
 
 #ifdef MONITOR_TIME
     clock_t start, end;
     start = clock();
 #endif
 
-    cudaStatus = cudaMalloc((void**) &src_gpu, sizeof(short) * array_size); 
-    cudaStatus = cudaMalloc((void**) &des_gpu, sizeof(short) * array_size);
+    cudaStatus = cudaMalloc((void**) &src_gpu, sizeof(T) * array_size); 
+    cudaStatus = cudaMalloc((void**) &des_gpu, sizeof(T) * array_size);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
@@ -110,7 +114,7 @@ cudaError_t convolution3DCUDA(
 {
     //cudaMemcpy2D(ac, sizeof(float) * n, a, sizeof(float) * lda, sizeof(float) * n, n, cudaMemcpyHostToDevice);
 
-    cudaStatus = cudaMemcpy(src_gpu, src, array_size*sizeof(short), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy(src_gpu, src, array_size*sizeof(T), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
@@ -121,7 +125,7 @@ cudaError_t convolution3DCUDA(
     //doConvolutionInPointCUDA<<<blocks, num_thread>>>(src_gpu, des_gpu, m, n, num_thread);
 
     unsigned int blocks = (y*z + NUM_THREADS - 1) / NUM_THREADS;
-    doConvolutionInLineCUDA<<<blocks, NUM_THREADS>>>(src_gpu, des_gpu, x, y, z);
+    doConvolutionInLineCUDA<<<blocks, NUM_THREADS>>>(src_gpu, des_gpu, x, y, z, default_value);
 
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
@@ -134,7 +138,7 @@ cudaError_t convolution3DCUDA(
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(des, des_gpu, array_size*sizeof(short), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(des, des_gpu, array_size*sizeof(T), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
@@ -153,12 +157,14 @@ Error:
     return cudaStatus;
 }
 
+template<typename T>
 int convolution3D(
-    const short* src,
-    short* des,
+    const T* src,
+    T* des,
     const int x,
     const int y,
-    const int z
+    const int z,
+    const T default_value
 ) {
 
 #ifdef MONITOR_TIME
@@ -167,8 +173,8 @@ int convolution3D(
 #endif
 
     int array_size = x * y * z;
-    short s_x, s_y, s_z;
-    short _s_x, _s_y, _s_z;
+    T s_x, s_y, s_z;
+    T _s_x, _s_y, _s_z;
     float temp;
 
     for(int k=1; k<z-1; k++){
@@ -214,7 +220,7 @@ int convolution3D(
                 if(abs(temp)>1e-5){
                     des[k*y*x + j*x + i] = src[k*y*x + j*x + i];
                 } else {
-                    des[k*y*x + j*x + i] = 0;
+                    des[k*y*x + j*x + i] = default_value;
                 }
             }
         }
@@ -227,9 +233,11 @@ int convolution3D(
     return 0;
 }
 
-int MY_EXPORT Get3DBorder(short* param_src, short* param_des, const int x , const int y, const int z) {
-    short* src = reinterpret_cast<short*>(param_src);
-    short* des = reinterpret_cast<short*>(param_des);
+template<typename T>
+int MY_EXPORT Get3DBorderTemplate(T* param_src, T* param_des, const int x , const int y, const int z, const T default_value) {
+
+    T* src = reinterpret_cast<T*>(param_src);
+    T* des = reinterpret_cast<T*>(param_des);
     if(x*y*z <= 0){
         return 0;
     }
@@ -240,7 +248,7 @@ int MY_EXPORT Get3DBorder(short* param_src, short* param_des, const int x , cons
 
     bool has_cuda = InitCUDA();
     if(has_cuda){
-        cudaError_t cudaStatus = convolution3DCUDA(src, des, x , y, z);
+        cudaError_t cudaStatus = convolution3DCUDA(src, des, x , y, z, default_value);
 
         // cudaDeviceReset must be called before exiting in order for profiling and
         // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -250,7 +258,7 @@ int MY_EXPORT Get3DBorder(short* param_src, short* param_des, const int x , cons
             return 1;
         }
     } else {
-        convolution3D(src, des, x , y, z);
+        convolution3D(src, des, x , y, z, default_value);
     }
 
 #ifdef DUMP_DEBUG
@@ -259,4 +267,13 @@ int MY_EXPORT Get3DBorder(short* param_src, short* param_des, const int x , cons
 #endif
 
     return 0;
+}
+
+int MY_EXPORT Get3DBorder(short* param_src, short* param_des, const int x , const int y, const int z) {
+    short default_value = 0;
+    return Get3DBorderTemplate(param_src, param_des, x, y, z, default_value);
+}
+
+int MY_EXPORT Get3DBorder(int* param_src, int* param_des, const int x , const int y, const int z) {
+    return Get3DBorderTemplate(param_src, param_des, x, y, z, 0);
 }
